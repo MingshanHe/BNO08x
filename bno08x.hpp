@@ -103,11 +103,11 @@ enum Registers
 class BNO08x
 {
 public:
-	BNO08x(SPI_HandleTypeDef hspi_);
+	BNO08x(SPI_HandleTypeDef* hspi_);
 public:
 	void BNO080_GPIO_SPI_Initialization(void);
 	int BNO080_Initialization(void);
-	uint8_t SPI2_SendByte(unsigned char data);
+	uint8_t SPI2_SendByte(uint8_t data);
 	int BNO080_dataAvailable(void);
 	int BNO080_waitForSPI(void);
 	int BNO080_receivePacket(void);
@@ -116,6 +116,9 @@ public:
 	void BNO080_setFeatureCommand(uint8_t reportID, uint32_t microsBetweenReports, uint32_t specificConfig);
 
 	float BNO080_getQuatI();
+	float BNO080_getQuatJ();
+	float BNO080_getQuatK();
+	float BNO080_getQuatReal();
 	float BNO080_qToFloat(int16_t fixedPointValue, uint8_t qPoint);
 
 
@@ -123,7 +126,7 @@ public:
 	void BNO080_parseInputReport(void);
 	void BNO080_parseCommandReport(void);
 public:
-	SPI_HandleTypeDef hspi;
+	SPI_HandleTypeDef*  hspi;
 
 	uint8_t shtpHeader[4]; //Each packet has a header of 4 bytes
 	uint8_t shtpData[MAX_PACKET_SIZE];

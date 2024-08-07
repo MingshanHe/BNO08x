@@ -9,27 +9,12 @@
 
 
 #include "bno08x.hpp"
-
-BNO08x::BNO08x(SPI_HandleTypeDef hspi_)
+#include <math.h>
+#include "stdio.h"
+BNO08x::BNO08x(SPI_HandleTypeDef* hspi_):
+	hspi(hspi_)
 {
-  hspi = hspi_;
-
-  hspi.Instance = SPI2;
-  hspi.Init.Mode = SPI_MODE_MASTER;
-  hspi.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi.Init.CLKPolarity = SPI_POLARITY_HIGH;
-  hspi.Init.CLKPhase = SPI_PHASE_2EDGE;
-  hspi.Init.NSS = SPI_NSS_SOFT;
-  hspi.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
-  hspi.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi) != HAL_OK)
-  {
-	Error_Handler();
-  }
+	//info: BNO08x initialization
 }
 
 void BNO08x::BNO080_GPIO_SPI_Initialization()
@@ -43,14 +28,14 @@ int BNO08x::BNO080_Initialization()
 {
 	BNO080_GPIO_SPI_Initialization();
 
-//	printf("Checking BNO080...");
+	printf("Checking BNO080...");
 
 	CHIP_DESELECT(BNO080);
 
 	//Configure the BNO080 for SPI communication
 	WAKE_HIGH();	//Before boot up the PS0/WAK pin must be high to enter SPI mode
 	RESET_LOW();	//Reset BNO080
-	HAL_Delay(400);	//Min length not specified in datasheet?
+	HAL_Delay(200);	//Min length not specified in datasheet?
 	RESET_HIGH();	//Bring out of reset
 
 	BNO080_waitForSPI(); //Wait until INT pin goes low.
@@ -78,14 +63,15 @@ int BNO08x::BNO080_Initialization()
 	BNO080_waitForSPI();
 	if (BNO080_receivePacket() == 1)
 	{
-//		printf("header: %d %d %d %d\n", shtpHeader[0], shtpHeader[1], shtpHeader[2], shtpHeader[3]);
+		printf("header: %d %d %d %d\n", shtpHeader[0], shtpHeader[1], shtpHeader[2], shtpHeader[3]);
 		if (shtpData[0] == SHTP_REPORT_PRODUCT_ID_RESPONSE)
 		{
-//			printf("BNO080 who_am_i = 0x%02x...ok\n\n", shtpData[0]);
+			printf("BNO080 who_am_i = 0x%02x...ok\n\n", shtpData[0]);
 			return (0);
 		}// Sensor OK
 	}
-//	printf("BNO080 Not OK: 0x%02x Should be 0x%02x\n", shtpData[0], SHTP_REPORT_PRODUCT_ID_RESPONSE);
+
+	printf("BNO080 Not OK: 0x%02x Should be 0x%02x\n", shtpData[0], SHTP_REPORT_PRODUCT_ID_RESPONSE);
 	return (1); //Something went wrong
 }
 
@@ -93,12 +79,11 @@ int BNO08x::BNO080_waitForSPI()
 {
 	for (uint32_t counter = 0; counter < 0xffffffff; counter++) //Don't got more than 255
 	{
-		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_RESET)
+		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8) == GPIO_PIN_RESET)
 		{
 			//printf("\nData available\n");
 			return (1);
 		}
-		//printf("SPI Wait %d\n", counter);
 	}
 //	printf("\nData not available\n");
 	return (0);
@@ -107,28 +92,17 @@ int BNO08x::BNO080_waitForSPI()
 int BNO08x::BNO080_receivePacket(void)
 {
 	uint8_t incoming;
-
-	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET)
+	if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8) == GPIO_PIN_SET)
 		return (0); //Data is not available
-
-	//Old way: if (BNO080_waitForSPI() == 0) return (0); //Something went wrong
-
 	//Get first four bytes to find out how much data we need to read
-
 	CHIP_SELECT(BNO080);
-//	HAL_Delay(100);
 	//Get the first four bytes, aka the packet header
 	uint8_t packetLSB = SPI2_SendByte(0);
 	uint8_t packetMSB = SPI2_SendByte(0);
 	uint8_t channelNumber = SPI2_SendByte(0);
-	uint8_t sequenceNumber = SPI2_SendByte(0); //Not sure if we need to store this or not
-	packetLSB = SPI2_SendByte(0);
-	packetLSB = SPI2_SendByte(0);
-	packetLSB = SPI2_SendByte(0);
-	packetLSB = SPI2_SendByte(0);
-	packetLSB = SPI2_SendByte(0);
+	uint8_t sequenceNumber = SPI2_SendByte(0);
 	//Store the header info
-	shtpHeader[0] = packetLSB;
+ 	shtpHeader[0] = packetLSB;
 	shtpHeader[1] = packetMSB;
 	shtpHeader[2] = channelNumber;
 	shtpHeader[3] = sequenceNumber;
@@ -136,63 +110,26 @@ int BNO08x::BNO080_receivePacket(void)
 	//Calculate the number of data bytes in this packet
 	int16_t dataLength = ((uint16_t)packetMSB << 8 | packetLSB);
 	dataLength &= 0x7fff; //Clear the MSbit.
-	//This bit indicates if this package is a continuation of the last. Ignore it for now.
-	//TODO catch this as an error and exit
 	if (dataLength == 0)
 	{
-		//Packet is empty
-		return (0); //All done
+		return (0);
 	}
-	dataLength -= 4; //Remove the header bytes from the data count
-
-	//printf("length: %d\n", dataLength);
-
-	//Read incoming data into the shtpData array
+	dataLength -= 4;
 	for (uint16_t dataSpot = 0; dataSpot < dataLength; dataSpot++)
 	{
 		incoming = SPI2_SendByte(0xFF);
-		//printf("%d ", incoming);
-		if (dataSpot < MAX_PACKET_SIZE)	//BNO080 can respond with upto 270 bytes, avoid overflow
-			shtpData[dataSpot] = incoming; //Store data into the shtpData array
+		if (dataSpot < MAX_PACKET_SIZE)
+			shtpData[dataSpot] = incoming;
 	}
-	//printf("\n");
-
-	CHIP_DESELECT(BNO080); //Release BNO080
+	CHIP_DESELECT(BNO080);
 	return (1); //We're done!
 }
 
-uint8_t BNO08x::SPI2_SendByte(unsigned char data)
+uint8_t BNO08x::SPI2_SendByte(uint8_t data)
 {
-//	while(LL_SPI_IsActiveFlag_TXE(BNO080_SPI_CHANNEL)==RESET);
-//	LL_SPI_TransmitData8(BNO080_SPI_CHANNEL, data);
-//
-//	while(LL_SPI_IsActiveFlag_RXNE(BNO080_SPI_CHANNEL)==RESET);
-//	return LL_SPI_ReceiveData8(BNO080_SPI_CHANNEL);
-	//	while(LL_SPI_IsActiveFlag_TXE(BNO080_SPI_CHANNEL)==RESET);
-	//	LL_SPI_TransmitData8(hdma_spi2_tx, data);
-
-//		while(!__HAL_SPI_GET_FLAG(&hspi, SPI_FLAG_TXE));
-//		data = 13;
-		HAL_SPI_Transmit(&hspi, (uint8_t *) data, 1, HAL_MAX_DELAY);
-//		while(!__HAL_SPI_GET_FLAG(&hspi, SPI_FLAG_RXNE));
-
-		  uint8_t receivedData;
-//		  if (__HAL_SPI_GET_FLAG(&hspi, SPI_FLAG_RXNE)) {
-//			  // 接收数据
-//
-//			  unsigned char RX = receivedData;
-//			  		return RX;
-//			  // 处理接收到的数据
-//		  }
-//		HAL_SPI_Receive(&hspi, &RX_Buffer, 2, HAL_MAX_DELAY);
-//		while(!__HAL_SPI_GET_FLAG(&hspi, SPI_FLAG_RXNE));
-		  HAL_SPI_Receive(&hspi, &receivedData, 1, HAL_MAX_DELAY);
+		uint8_t receivedData;
+		HAL_SPI_TransmitReceive(hspi, &data, &receivedData, 1, HAL_MAX_DELAY);
 		return receivedData;
-}
-
-void BNO08x::BNO080_enableRotationVector(uint16_t timeBetweenReports)
-{
-	BNO080_setFeatureCommand(SENSOR_REPORTID_ROTATION_VECTOR, timeBetweenReports, 0);
 }
 
 
@@ -227,6 +164,21 @@ int BNO08x::BNO080_sendPacket(uint8_t channelNumber, uint8_t dataLength)
 
 
 
+//Given a register value and a Q point, convert to float
+//See https://en.wikipedia.org/wiki/Q_(number_format)
+float BNO08x::BNO080_qToFloat(int16_t fixedPointValue, uint8_t qPoint)
+{
+	return fixedPointValue * powf(2, qPoint * -1);
+}
+
+//Sends the packet to enable the rotation vector
+void BNO08x::BNO080_enableRotationVector(uint16_t timeBetweenReports)
+{
+	BNO080_setFeatureCommand(SENSOR_REPORTID_ROTATION_VECTOR, timeBetweenReports, 0);
+}
+
+//Given a sensor's report ID, this tells the BNO080 to begin reporting the values
+//Also sets the specific config word. Useful for personal activity classifier
 void BNO08x::BNO080_setFeatureCommand(uint8_t reportID, uint32_t microsBetweenReports, uint32_t specificConfig)
 {
 	shtpData[0] = SHTP_REPORT_SET_FEATURE_COMMAND;	 //Set feature command. Reference page 55
@@ -251,22 +203,16 @@ void BNO08x::BNO080_setFeatureCommand(uint8_t reportID, uint32_t microsBetweenRe
 	BNO080_sendPacket(CHANNEL_CONTROL, 17);
 }
 
-float BNO08x::BNO080_getQuatI()
-{
-	return BNO080_qToFloat(rawQuatI, rotationVector_Q1);
-}
-
-float BNO08x::BNO080_qToFloat(int16_t fixedPointValue, uint8_t qPoint)
-{
-	return fixedPointValue * powf(2, qPoint * -1);
-}
+//Updates the latest variables if possible
+//Returns false if new readings are not available
 int BNO08x::BNO080_dataAvailable(void)
 {
 	//If we have an interrupt pin connection available, check if data is available.
 	//If int pin is NULL, then we'll rely on BNO080_receivePacket() to timeout
 	//See issue 13: https://github.com/sparkfun/SparkFun_BNO080_Arduino_Library/issues/13
-	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == GPIO_PIN_SET)
+	if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8) == GPIO_PIN_SET)
 		return (0); //Data is not available
+
 	if (BNO080_receivePacket() == 1)
 	{
 		//Check to see if this packet is a sensor reporting its data to us
@@ -282,6 +228,26 @@ int BNO08x::BNO080_dataAvailable(void)
 		}
 	}
 	return (0);
+}
+void BNO08x::BNO080_parseCommandReport(void)
+{
+	if (shtpData[0] == SHTP_REPORT_COMMAND_RESPONSE)
+	{
+		//The BNO080 responds with this report to command requests. It's up to use to remember which command we issued.
+		uint8_t command = shtpData[2]; //This is the Command byte of the response
+
+		if (command == COMMAND_ME_CALIBRATE)
+		{
+			calibrationStatus = shtpData[5]; //R0 - Status (0 = success, non-zero = fail)
+		}
+	}
+	else
+	{
+		//This sensor report ID is unhandled.
+		//See reference manual to add additional feature reports as needed
+	}
+
+	//TODO additional feature reports may be strung together. Parse them all.
 }
 
 void BNO08x::BNO080_parseInputReport(void)
@@ -398,23 +364,25 @@ void BNO08x::BNO080_parseInputReport(void)
 
 	//TODO additional feature reports may be strung together. Parse them all.
 }
-void BNO08x::BNO080_parseCommandReport(void)
+//Return the rotation vector quaternion I
+float BNO08x::BNO080_getQuatI()
 {
-	if (shtpData[0] == SHTP_REPORT_COMMAND_RESPONSE)
-	{
-		//The BNO080 responds with this report to command requests. It's up to use to remember which command we issued.
-		uint8_t command = shtpData[2]; //This is the Command byte of the response
+	return BNO080_qToFloat(rawQuatI, rotationVector_Q1);
+}
+//Return the rotation vector quaternion J
+float BNO08x::BNO080_getQuatJ()
+{
+	return BNO080_qToFloat(rawQuatJ, rotationVector_Q1);
+}
 
-		if (command == COMMAND_ME_CALIBRATE)
-		{
-			calibrationStatus = shtpData[5]; //R0 - Status (0 = success, non-zero = fail)
-		}
-	}
-	else
-	{
-		//This sensor report ID is unhandled.
-		//See reference manual to add additional feature reports as needed
-	}
+//Return the rotation vector quaternion K
+float BNO08x::BNO080_getQuatK()
+{
+	return BNO080_qToFloat(rawQuatK, rotationVector_Q1);
+}
 
-	//TODO additional feature reports may be strung together. Parse them all.
+//Return the rotation vector quaternion Real
+float BNO08x::BNO080_getQuatReal()
+{
+	return BNO080_qToFloat(rawQuatReal, rotationVector_Q1);
 }
